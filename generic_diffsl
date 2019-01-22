@@ -6,11 +6,10 @@ if [ $# -lt 6 ] ; then
     echo "" ;
     echo "v.1 22/01/2019 H. Lemaitre (herve.lemaitre@u-psud.fr)" ;
     echo "" ;
-    echo "Preprocess Imagen dti data for:" ;
+    echo "Preprocess dti data for:" ;
     echo "1. Linear registration with eddy current correction and bvec rotation" ;
     echo "2. Brain extraction" 
     echo "3. Tensor computation with weighted least squares" ;
-    echo "" ;
     echo "" ;
     echo "Ex: " ;
     echo "generic_diffsl dti /disk/" ;
@@ -31,7 +30,7 @@ echo "Creating directory and copying data in:" ;
 echo ${pdir}
 
 dti=`${FSLDIR}/bin/remove_ext ${1}` ;
-subject=`basename ${dti} | cut -d "_" -f1` ;
+subject=`basename ${dti}` ;
 if [ -d "${pdir}/${subject}" ]; then
 	rm -rf ${pdir}/${subject} 
 	mkdir -p ${pdir}/${subject}
