@@ -1,0 +1,181 @@
+#! /bin/bash
+
+if [ $# -lt 6 ] ; then
+    echo "" ;	
+    echo "Usage: generic_diffsl <dti> <pdir>" ;
+    echo "" ;
+    echo "v.1 22/01/2019 H. Lemaitre (herve.lemaitre@u-psud.fr)" ;
+    echo "" ;
+    echo "Preprocess Imagen dti data for:" ;
+    echo "1. Linear registration with eddy current correction and bvec rotation" ;
+    echo "2. Brain extraction" 
+    echo "3. Tensor computation with weighted least squares" ;
+    echo "" ;
+    echo "" ;
+    echo "Ex: " ;
+    echo "generic_diffsl dti /disk/" ;
+    echo "" ;
+    echo "Depends: FSL (>= 5)" ;
+    echo "" ;
+    exit 1 ; 
+fi
+
+echo "############## Initialization				##############"
+pdir=${2}
+echo "FSL `cat ${FSLDIR}/etc/fslversion`" ;
+echo "host: `hostname`" ;
+echo "Processing:" ;
+echo "$1" ;
+echo "$2" ;
+echo "Creating directory and copying data in:" ;
+echo ${pdir}
+
+dti=`${FSLDIR}/bin/remove_ext ${1}` ;
+subject=`basename ${dti} | cut -d "_" -f1` ;
+if [ -d "${pdir}/${subject}" ]; then
+	rm -rf ${pdir}/${subject} 
+	mkdir -p ${pdir}/${subject}
+	else mkdir -p ${pdir}/${subject}
+fi	
+echo "Start process for subject ${subject}:"
+if [ `imtest ${dti}` -eq 1 ]; then
+	echo "...dti file does exist"
+	${FSLDIR}/bin/imcp ${dti} ${pdir}/${subject}/${subject}_dti
+	else echo "...dti file does NOT exist!"
+	exit
+fi
+if [ -f ${dti}.bval ]; then
+	echo "...bval file does exist"
+	cp ${dti}.bval ${pdir}/${subject}/${subject}_dti.bval
+	else echo "...bval file does NOT exist!"
+  exit
+fi
+if [ -f ${dti}.bvec ]; then
+	echo "...bvec file does exist"
+	cp ${dti}.bvec ${pdir}/${subject}/${subject}_dti.bvec
+	else echo "...bvec file does NOT exist!"
+	exit
+ fi
+
+echo "############## Eddy current correction ##############"
+cd ${pdir}/${subject}
+# Mainly from eddy_correct script
+ref=0 ;									# reference volume
+input=${subject}_dti ;
+output=${subject}_dti_ecc ;
+ii=1 ;
+triger1=1 ;
+triger2=`echo $triger1 + 10000 | bc | cut -b2-5` ;
+dim=`${FSLDIR}/bin/fslval ${input} dim4` ;
+
+${FSLDIR}/bin/fslroi ${input} ${output}_ref $ref 1 ;
+${FSLDIR}/bin/fslsplit ${input} ${output}_tmp ;
+full_list=`${FSLDIR}/bin/imglob ${output}_tmp????.*` ;
+
+echo "Dropout slices:" ;
+echo "...Computing b0 slices" ; 
+${FSLDIR}/bin/fslsplit ${output}_tmp0000 ${output}_tmp_b0_z -z ;
+${FSLDIR}/bin/fslmerge -t ${output}_tmp_b0_z ${output}_tmp_b0_z* 2> /dev/null ;
+b0=`${FSLDIR}/bin/fslstats -t ${output}_tmp_b0_z -M` ;
+echo ${b0} >> ${input}.slices ;
+
+echo "...Computing diffusion slices" ;
+while [ $triger1 -lt $dim ] ; do
+${FSLDIR}/bin/fslsplit ${output}_tmp${triger2} ${output}_tmp${triger2}_z -z ;
+${FSLDIR}/bin/fslmerge -t ${output}_tmp${triger2}_z ${output}_tmp${triger2}_z* 2> /dev/null ;
+w=`${FSLDIR}/bin/fslstats -t ${output}_tmp${triger2}_z -M` ;
+echo ${w}  >> ${input}.slices ;
+triger1=`echo $triger1 + 1 | bc` ;
+triger2=`echo $triger2 + 10001 | bc | cut -b2-5` ;
+done
+echo "Done" ;
+
+echo "Linear Registration:" ;
+echo "# Eddy current correction log" > ${output}.log ;
+echo "volume total.angle[rads] exclusion2 exclusion5" > ${output}.rotation ; 
+
+for i in ${full_list} ; do
+    vol=`${FSLDIR}/bin/remove_ext ${i}` ;
+    mat=`echo ${vol}.mat` ;
+    echo processing ${vol} ;
+    echo processing ${vol} >> ${output}.log ;
+    # warping
+    ${FSLDIR}/bin/flirt -in ${vol} -ref ${output}_ref -nosearch -omat ${mat} ;
+    ${FSLDIR}/bin/flirt -in ${vol} -ref ${output}_ref -init ${mat} -applyxfm -o ${vol} -paddingsize 1 ;
+    ${FSLDIR}/bin/avscale --allparams ${mat} >> ${output}.log ;
+    # extract the three rotation angles in radians
+    angle1=`${FSLDIR}/bin/avscale --allparams ${mat} | grep 'Rotation Angles' | cut -d "=" -f2 | awk '{print $1}'` ;
+    angle2=`${FSLDIR}/bin/avscale --allparams ${mat} | grep 'Rotation Angles' | cut -d "=" -f2 | awk '{print $2}'` ;
+    angle3=`${FSLDIR}/bin/avscale --allparams ${mat} | grep 'Rotation Angles' | cut -d "=" -f2 | awk '{print $3}'` ;
+    # Total angle
+    angletotal=`echo "sqrt(${angle1}^2+${angle2}^2+${angle3}^2)" | bc -l` ;
+    angletotal2=`echo "sqrt(${angle1}^2+${angle2}^2+${angle3}^2)*10000" | bc -l | cut -d "." -f1` ;
+    # thresholding (5 degrees = 0.0872665 radians = 872; 2 degrees = 0.0349066 radians = 349)
+    threshold2=349 ;
+    threshold5=872 ;
+    if [ ${angletotal2} -gt ${threshold2} ]; then trigger2=1; else trigger2=0; fi
+    if [ ${angletotal2} -gt ${threshold5} ]; then trigger5=1; else trigger5=0; fi
+    echo ${vol} ${angletotal} ${trigger2} ${trigger5} >> ${output}.rotation ;
+    # bvecs rotation (from fdt_rotate_bvecs)
+    m11=`avscale ${mat} | grep Rotation -A 1 | tail -n 1| awk '{print $1}'`
+    m12=`avscale ${mat} | grep Rotation -A 1 | tail -n 1| awk '{print $2}'`
+    m13=`avscale ${mat} | grep Rotation -A 1 | tail -n 1| awk '{print $3}'`
+    m21=`avscale ${mat} | grep Rotation -A 2 | tail -n 1| awk '{print $1}'`
+    m22=`avscale ${mat} | grep Rotation -A 2 | tail -n 1| awk '{print $2}'`
+    m23=`avscale ${mat} | grep Rotation -A 2 | tail -n 1| awk '{print $3}'`
+    m31=`avscale ${mat} | grep Rotation -A 3 | tail -n 1| awk '{print $1}'`
+    m32=`avscale ${mat} | grep Rotation -A 3 | tail -n 1| awk '{print $2}'`
+    m33=`avscale ${mat} | grep Rotation -A 3 | tail -n 1| awk '{print $3}'`
+
+    X=`cat ${input}.bvec | awk -v x=$ii '{print $x}' | head -n 1 | tail -n 1 | awk -F"E" 'BEGIN{OFMT="%10.10f"} {print $1 * (10 ^ $2)}' `
+    Y=`cat ${input}.bvec | awk -v x=$ii '{print $x}' | head -n 2 | tail -n 1 | awk -F"E" 'BEGIN{OFMT="%10.10f"} {print $1 * (10 ^ $2)}' `
+    Z=`cat ${input}.bvec | awk -v x=$ii '{print $x}' | head -n 3 | tail -n 1 | awk -F"E" 'BEGIN{OFMT="%10.10f"} {print $1 * (10 ^ $2)}' `
+    rX=`echo "scale=7;  ($m11 * $X) + ($m12 * $Y) + ($m13 * $Z)" | bc -l`
+    rY=`echo "scale=7;  ($m21 * $X) + ($m22 * $Y) + ($m23 * $Z)" | bc -l`
+    rZ=`echo "scale=7;  ($m31 * $X) + ($m32 * $Y) + ($m33 * $Z)" | bc -l`
+
+    if [ "$ii" -eq 1 ];then
+	echo $rX > ${output}.bvec;echo $rY >> ${output}.bvec;echo $rZ >> ${output}.bvec
+    else
+	cp ${output}.bvec ${output}_bvectmp
+	(echo $rX;echo $rY;echo $rZ) | paste ${output}_bvectmp - > ${output}.bvec
+    fi
+    let "ii+=1"
+done
+
+${FSLDIR}/bin/fslmerge -t ${output} ${full_list}
+
+/bin/rm -f $tmpo
+/bin/rm ${output}_tmp????.* ${output}_ref* ${output}_tmp_b0_z* ${output}_tmp????_z????* ${output}_bvectmp
+
+echo "Done" ;
+
+echo "############## Brain extraction after EC correction	##############"
+${FSLDIR}/bin/fslmaths ${subject}_dti_ecc -Tmean mean_tmp
+${FSLDIR}/bin/bet2 mean_tmp mean_tmp_bet -f 0.4 -n -m
+${FSLDIR}/bin/immv mean_tmp_bet_mask ${subject}_dti_ecc_mask
+${FSLDIR}/bin/fslmaths ${subject}_dti_ecc -mas ${subject}_dti_ecc_mask ${subject}_dti_ecc_brain
+/bin/rm -f mean_tmp*
+echo "Done"
+
+echo "############## Tensor computation after EC correction	##############"
+
+echo "Tensor fitting with weighted least squares:" ;
+${FSLDIR}/bin/dtifit -k ${subject}_dti_ecc_brain -o ${subject}_dti_ecc_brain -r ${subject}_dti_ecc.bvec -b ${subject}_dti.bval -m ${subject}_dti_ecc_mask -w
+
+# Radial Diffusivity
+${FSLDIR}/bin/fslmaths ${subject}_dti_ecc_brain_L2 -add ${subject}_dti_ecc_brain_L3 -div 2 ${subject}_dti_ecc_brain_RD
+
+# Summary log
+echo "# Summary Tensor Fitting with weighted least squares" > ${subject}_dti_ecc_brain_tf.log
+echo "# Img	Mean	SD	Min	Max " >> ${subject}_dti_ecc_brain_tf.log
+echo S0 `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_S0 -M` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_S0 -S` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_S0 -R` >> ${subject}_dti_ecc_brain_tf.log
+echo FA `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_FA -M` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_FA -S` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_FA -R` >> ${subject}_dti_ecc_brain_tf.log
+echo MD `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_MD -M` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_MD -S` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_MD -R` >> ${subject}_dti_ecc_brain_tf.log
+echo MO `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_MO -M` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_MO -S` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_MO -R` >> ${subject}_dti_ecc_brain_tf.log
+echo L1 `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L1 -M` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L1 -S` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L1 -R` >> ${subject}_dti_ecc_brain_tf.log
+echo L2 `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L2 -M` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L2 -S` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L2 -R` >> ${subject}_dti_ecc_brain_tf.log
+echo L3 `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L3 -M` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L3 -S` `${FSLDIR}/bin/fslstats ${subject}_dti_ecc_brain_L3 -R` >> ${subject}_dti_ecc_brain_tf.log
+echo "Done"
+
+echo "############## Process for subject ${subject} done	##############"
