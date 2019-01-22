@@ -11,7 +11,7 @@ The generic_diffsl is a generic script  to preprocess dti data
 Configuration:
 -----------------
 
-Imagen_diffsl needs FSL>=5.09 to be installed on your system and properly set up (http://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation).
+generic_diffsl needs FSL>=5.09 to be installed on your system and properly set up (http://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation).
 
 -----------------
 Preprocessing steps:
