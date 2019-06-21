@@ -5,7 +5,7 @@ Generic Diffusion tensor preprocessing with fsl
 -----------------
 Goal:
 -----------------
-The generic_diffsl is a generic script  to preprocess dti data 
+The generic_diffsl is a generic script to preprocess dti data with fsl.
 
 -----------------
 Configuration:
@@ -72,7 +72,7 @@ Several automatic QC steps can be performed on these output files:
 QCing the number of volumes and slices.
 
 * File: subject_dtit.slices
-* Flag: if # of volumes != 36 or # of slices != 60
+* Flag: if # of volumes does not correspond.
 
 2. Slice-dropout
 
@@ -93,4 +93,4 @@ QCing volume by volume for head rotation based on the matrix used for the spatia
 QCing the tensor computation by using a k-means clustering on the global FA, MD, L1, L2, L3 and MO values.
 
 * Files: subject_dti_ecc_brain_tf.log
-* Flag: if not in the two main clusters.
+* Flag: if not in the main clusters.
